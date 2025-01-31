@@ -1,0 +1,104 @@
+---
+format: 
+  html:
+    self-contained: true
+    embed-resources: true
+editor: visual
+execute: 
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(tidyverse)
+library(sf)
+library(osmdata)
+library(cancensus)
+library(mountainmathHelpers)
+library(leaflet)
+```
+
+```{r}
+vancouver_region <- get_census(dataset='CA21', regions=list(CSD=c("5915022","5915803"),CT=c("9330069.03","9330069.04","9330069.02")),  geo_format='sf') |>
+  summarize(across(c(Population,Households,Dwellings),sum))
+```
+
+```{r}
+x <- opq (bbox = st_bbox(vancouver_region)) %>%
+    add_osm_feature (key = "wheelchair") %>%
+    osmdata_sf ()
+```
+
+```{r}
+wheel_points <- x$osm_points |>
+  filter(!is.na(wheelchair)) |>
+  st_filter(vancouver_region) |>
+  mutate(wheel_status=case_when(wheelchair %in% c("yes","designated") ~ "Good",
+                                wheelchair %in% c("limited","flat concrete from gravel path", "limited, on grass", "half","not from oak side (beneath a flight of stairs) but accessible from other end") ~ "OK",
+                                TRUE ~ "Bad"))
+```
+
+```{r eval=FALSE}
+ggplot(vancouver_region) + 
+  geom_sf(fill="brown") +
+  geom_water() +
+  geom_roads()
+```
+
+```{r eval=FALSE}
+ggplot(vancouver_region) + 
+  geom_sf(fill="brown") +
+  geom_water() +
+  geom_roads() +
+  geom_sf(data=wheel_points,aes(colour=wheel_status))
+```
+
+```{r}
+wheel_toilets <- x$osm_points |>
+  filter(!is.na(`toilets:wheelchair`)|amenity=="toilets" & !is.na(wheelchair)) |>
+  st_filter(vancouver_region) |>
+  mutate(wheel_status=case_when(wheelchair %in% c("yes","designated") ~ "Good",
+                                wheelchair %in% c("limited","flat concrete from gravel path", "limited, on grass", "half","not from oak side (beneath a flight of stairs) but accessible from other end") ~ "OK",
+                                TRUE ~ "Bad")) |>
+  mutate(wheel_status=coalesce(wheel_status,case_when(`toilets:wheelchair`=="yes" ~ "Good",
+                                                      TRUE ~ "Bad")))
+```
+
+```{r eval=FALSE}
+
+ggplot(vancouver_region) + 
+  geom_sf(fill="brown") +
+  geom_water() +
+  geom_roads() +
+  geom_sf(data=wheel_toilets,aes(colour=wheel_status))
+```
+
+# WheelVancouver Design for Dissability
+
+```{r}
+
+vancouver_centre <- st_centroid(vancouver_region) |> st_coordinates()
+
+toilet_data <- wheel_toilets %>%
+  bind_cols(st_coordinates(.)) |>
+  select(wheel_status,lat=Y,lng=X) |>
+  mutate(colour=case_when(wheel_status=="Good" ~ "green",
+                          wheel_status=="OK" ~ "orange",
+                          wheel_status=="Bad" ~ "firebrick",
+                          TRUE ~ 'darkgrey'))
+
+icons <- awesomeIcons(
+  icon = 'ios-close',
+  iconColor = 'black',
+  library = 'ion',
+  markerColor = toilet_data$colour
+)
+
+m <- leaflet() |>
+  addTiles() |>
+  setView(vancouver_centre[1],vancouver_centre[2], zoom = 12) |>
+  addAwesomeMarkers(lat=toilet_data$lat,lng=toilet_data$lng,popup=toilet_data$wheel_status,
+                    icon=icons)
+m
+```
